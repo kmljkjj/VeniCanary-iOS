@@ -4,8 +4,6 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
-  release:
-    types: [published]
 
 jobs:
   build:
@@ -15,14 +13,39 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Select Xcode
-        run: sudo xcode-select -s /Applications/Xcode_15.4.app || sudo xcode-select -s /Applications/Xcode.app
+      - name: Show Xcode versions
+        run: ls /Applications | grep -i xcode || true
+
+      - name: Select Xcode 15.4
+        run: |
+          if [ -d /Applications/Xcode_15.4.app ]; then
+            sudo xcode-select -s /Applications/Xcode_15.4.app
+          elif [ -d /Applications/Xcode_15.3.app ]; then
+            sudo xcode-select -s /Applications/Xcode_15.3.app
+          else
+            sudo xcode-select -s /Applications/Xcode.app
+          fi
+          xcodebuild -version
 
       - name: Install XcodeGen
         run: brew install xcodegen
 
-      - name: Generate Xcode project
-        run: xcodegen generate
+      - name: Generate Xcode project (Xcode 15 format)
+        run: |
+          xcodegen generate --spec project.yml
+          # Force older project format if xcodegen still emits 77
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path("VeniCanary.xcodeproj/project.pbxproj")
+          t = p.read_text()
+          # objectVersion 77 = Xcode 16; 56/60 work with Xcode 15
+          t2 = t
+          for old in ("objectVersion = 77;", "objectVersion = 70;", "objectVersion = 63;"):
+              t2 = t2.replace(old, "objectVersion = 56;")
+          # Remove attributes only understood by newer Xcode if present
+          p.write_text(t2)
+          print("objectVersion line:", [ln.strip() for ln in t2.splitlines() if "objectVersion" in ln][:3])
+          PY
 
       - name: Build archive (unsigned)
         run: |
@@ -38,33 +61,19 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
             AD_HOC_CODE_SIGNING_ALLOWED=YES \
-            archive | xcpretty || true
-
-          # Fallback without xcpretty if needed
-          if [ ! -d build/VeniCanary.xcarchive ]; then
-            xcodebuild \
-              -project VeniCanary.xcodeproj \
-              -scheme VeniCanary \
-              -configuration Release \
-              -destination 'generic/platform=iOS' \
-              -archivePath "$PWD/build/VeniCanary.xcarchive" \
-              CODE_SIGNING_ALLOWED=NO \
-              CODE_SIGNING_REQUIRED=NO \
-              CODE_SIGN_IDENTITY="" \
-              archive
-          fi
+            archive
 
       - name: Package IPA
         run: |
           set -euo pipefail
           APP="build/VeniCanary.xcarchive/Products/Applications/VeniCanary.app"
           if [ ! -d "$APP" ]; then
-            echo "App not found in archive"; ls -laR build || true; exit 1
+            echo "App not found"; find build -maxdepth 4 -type d -print; exit 1
           fi
           mkdir -p build/Payload
           cp -R "$APP" build/Payload/
           cd build
-          zip -r VeniCanary.ipa Payload
+          zip -qr VeniCanary.ipa Payload
           ls -lh VeniCanary.ipa
 
       - name: Upload IPA artifact
