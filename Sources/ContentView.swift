@@ -7,10 +7,12 @@ struct ContentView: View {
         ZStack {
             Color.black.ignoresSafeArea()
 
-            // Keep WebView inside safe area so top/bottom Discord bars stay tappable
-            DiscordWebView(model: model)
+            // Only mount WebView once Vencord is downloaded (so injection is present at first load)
+            if model.ready {
+                DiscordWebView(model: model)
+            }
 
-            if model.isLoading {
+            if model.isLoading || !model.ready {
                 VStack(spacing: 16) {
                     ProgressView()
                         .progressViewStyle(CircularProgressViewStyle(tint: .yellow))
@@ -29,8 +31,6 @@ struct ContentView: View {
                 .cornerRadius(16)
             }
         }
-        .onAppear {
-            model.start()
-        }
+        .onAppear { model.start() }
     }
 }
