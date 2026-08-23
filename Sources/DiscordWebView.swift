@@ -18,7 +18,6 @@ struct DiscordWebView: UIViewRepresentable {
         prefs.allowsContentJavaScript = true
         config.defaultWebpagePreferences = prefs
 
-        // Viewport + desktop layout helpers (run very early)
         let boot = WKUserScript(
             source: Self.bootScript,
             injectionTime: .atDocumentStart,
@@ -40,16 +39,14 @@ struct DiscordWebView: UIViewRepresentable {
         webView.uiDelegate = context.coordinator
         webView.allowsBackForwardNavigationGestures = true
         webView.scrollView.contentInsetAdjustmentBehavior = .never
-        webView.scrollView.minimumZoomScale = 0.25
-        webView.scrollView.maximumZoomScale = 3.0
+        webView.scrollView.minimumZoomScale = 0.2
+        webView.scrollView.maximumZoomScale = 2.5
         webView.scrollView.bouncesZoom = true
+        webView.scrollView.delaysContentTouches = false
+        webView.scrollView.canCancelContentTouches = true
         webView.customUserAgent = Config.userAgent
         webView.isOpaque = false
         webView.backgroundColor = .black
-
-        // Better hit-testing on small controls
-        webView.scrollView.delaysContentTouches = false
-        webView.scrollView.canCancelContentTouches = true
 
         context.coordinator.webView = webView
 
@@ -73,52 +70,97 @@ struct DiscordWebView: UIViewRepresentable {
         }
     }
 
-    /// Force desktop layout + scale page to fit the phone width
+    /// Desktop layout + scale that fits BOTH width and height of the phone
     static let bootScript = """
     (function () {
-      try {
-        // Pretend we have a wide desktop viewport
-        var w = Math.max(1280, screen.width || 1280);
+      var DESIGN_W = 1280;
+      var DESIGN_H = 800;
 
-        function applyViewport() {
-          var meta = document.querySelector('meta[name="viewport"]');
-          if (!meta) {
-            meta = document.createElement('meta');
-            meta.name = 'viewport';
-            (document.head || document.documentElement).appendChild(meta);
-          }
-          // Zoom out to fit desktop Discord on iPhone width
-          meta.content =
-            'width=' + w +
-            ', initial-scale=0.35, minimum-scale=0.25, maximum-scale=3, user-scalable=yes';
-        }
-
-        applyViewport();
-
-        // Keep re-applying (Discord rewrites head sometimes)
-        var obs = new MutationObserver(function () { applyViewport(); });
-        if (document.documentElement) {
-          obs.observe(document.documentElement, { childList: true, subtree: true });
-        }
-
-        // Prefer desktop CSS breakpoints
+      function fitScale() {
+        var sw = window.screen && screen.width ? screen.width : 390;
+        var sh = window.screen && screen.height ? screen.height : 844;
+        // Prefer visual viewport when available (more accurate on iOS)
         try {
-          Object.defineProperty(window, 'innerWidth', { get: function() { return w; } });
-          Object.defineProperty(window, 'outerWidth', { get: function() { return w; } });
+          if (window.visualViewport) {
+            sw = visualViewport.width || sw;
+            sh = visualViewport.height || sh;
+          }
         } catch (e) {}
+        var sx = sw / DESIGN_W;
+        var sy = sh / DESIGN_H;
+        // Fit entire desktop UI on screen (no cropping top/bottom)
+        var s = Math.min(sx, sy);
+        // Keep readable but fully visible — clamp
+        if (s < 0.28) s = 0.28;
+        if (s > 0.55) s = 0.55;
+        return { w: DESIGN_W, h: DESIGN_H, s: s };
+      }
 
-        // Improve tap targets slightly
-        var style = document.createElement('style');
-        style.id = 'venicanary-touch';
-        style.textContent = [
-          'html, body { -webkit-text-size-adjust: 100% !important; }',
-          '* { -webkit-tap-highlight-color: rgba(88,101,242,0.25); }',
-          'button, a, [role="button"], [role="menuitem"], [class*="clickable"] {',
+      function applyViewport() {
+        var f = fitScale();
+        var meta = document.querySelector('meta[name="viewport"]');
+        if (!meta) {
+          meta = document.createElement('meta');
+          meta.name = 'viewport';
+          (document.head || document.documentElement).appendChild(meta);
+        }
+        meta.content =
+          'width=' + f.w +
+          ', height=' + f.h +
+          ', initial-scale=' + f.s +
+          ', minimum-scale=0.2, maximum-scale=2.5, user-scalable=yes, viewport-fit=cover';
+      }
+
+      function applyLayoutCSS() {
+        var id = 'venicanary-fit';
+        var el = document.getElementById(id);
+        if (!el) {
+          el = document.createElement('style');
+          el.id = id;
+          (document.documentElement || document).appendChild(el);
+        }
+        el.textContent = [
+          'html, body {',
+          '  margin: 0 !important;',
+          '  padding: 0 !important;',
+          '  width: 100% !important;',
+          '  height: 100% !important;',
+          '  overflow: auto !important;',
+          '  -webkit-text-size-adjust: 100% !important;',
+          '  touch-action: manipulation;',
+          '}',
+          /* Make bars easier to tap after downscale */
+          'button, a, [role="button"], [role="menuitem"], [class*="clickable"], [class*="bar"] {',
           '  cursor: pointer !important;',
           '}',
         ].join('\n');
-        (document.documentElement || document).appendChild(style);
+      }
+
+      function applyAll() {
+        try {
+          applyViewport();
+          applyLayoutCSS();
+        } catch (e) {}
+      }
+
+      applyAll();
+
+      // Discord rewrites DOM — re-apply
+      try {
+        var obs = new MutationObserver(function () { applyAll(); });
+        obs.observe(document.documentElement, { childList: true, subtree: true });
       } catch (e) {}
+
+      // Fake desktop width for CSS breakpoints
+      try {
+        Object.defineProperty(window, 'innerWidth', { get: function () { return DESIGN_W; } });
+        Object.defineProperty(window, 'outerWidth', { get: function () { return DESIGN_W; } });
+      } catch (e) {}
+
+      window.addEventListener('resize', applyAll, { passive: true });
+      window.addEventListener('orientationchange', function () {
+        setTimeout(applyAll, 200);
+      });
     })();
     """
 
@@ -154,20 +196,34 @@ struct DiscordWebView: UIViewRepresentable {
         }
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-            // Extra zoom-out after load (pinches still work)
+            // Re-fit after Discord paints
             let js = """
             (function(){
               try {
+                var DESIGN_W = 1280, DESIGN_H = 800;
+                var sw = (window.visualViewport && visualViewport.width) || screen.width || 390;
+                var sh = (window.visualViewport && visualViewport.height) || screen.height || 844;
+                var s = Math.min(sw / DESIGN_W, sh / DESIGN_H);
+                if (s < 0.28) s = 0.28;
+                if (s > 0.55) s = 0.55;
                 var meta = document.querySelector('meta[name="viewport"]');
-                if (meta) {
-                  meta.content = 'width=1280, initial-scale=0.35, minimum-scale=0.25, maximum-scale=3, user-scalable=yes';
+                if (!meta) {
+                  meta = document.createElement('meta');
+                  meta.name = 'viewport';
+                  document.head.appendChild(meta);
                 }
-                // Scroll to top-left
-                window.scrollTo(0,0);
+                meta.content = 'width=' + DESIGN_W + ', initial-scale=' + s +
+                  ', minimum-scale=0.2, maximum-scale=2.5, user-scalable=yes, viewport-fit=cover';
+                window.scrollTo(0, 0);
               } catch(e) {}
             })();
             """
             webView.evaluateJavaScript(js, completionHandler: nil)
+
+            // Second pass after layout settles
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+                webView.evaluateJavaScript(js, completionHandler: nil)
+            }
         }
 
         func webView(

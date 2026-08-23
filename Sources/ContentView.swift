@@ -7,8 +7,8 @@ struct ContentView: View {
         ZStack {
             Color.black.ignoresSafeArea()
 
+            // Keep WebView inside safe area so top/bottom Discord bars stay tappable
             DiscordWebView(model: model)
-                .ignoresSafeArea()
 
             if model.isLoading {
                 VStack(spacing: 16) {
