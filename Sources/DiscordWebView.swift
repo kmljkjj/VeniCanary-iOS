@@ -18,7 +18,14 @@ struct DiscordWebView: UIViewRepresentable {
         prefs.allowsContentJavaScript = true
         config.defaultWebpagePreferences = prefs
 
-        // Inject as early as possible once script is ready
+        // Viewport + desktop layout helpers (run very early)
+        let boot = WKUserScript(
+            source: Self.bootScript,
+            injectionTime: .atDocumentStart,
+            forMainFrameOnly: true
+        )
+        config.userContentController.addUserScript(boot)
+
         if let js = model.vencordScript {
             let script = WKUserScript(
                 source: Self.wrapVencord(js: js, css: model.vencordCSS),
@@ -33,9 +40,16 @@ struct DiscordWebView: UIViewRepresentable {
         webView.uiDelegate = context.coordinator
         webView.allowsBackForwardNavigationGestures = true
         webView.scrollView.contentInsetAdjustmentBehavior = .never
+        webView.scrollView.minimumZoomScale = 0.25
+        webView.scrollView.maximumZoomScale = 3.0
+        webView.scrollView.bouncesZoom = true
         webView.customUserAgent = Config.userAgent
         webView.isOpaque = false
         webView.backgroundColor = .black
+
+        // Better hit-testing on small controls
+        webView.scrollView.delaysContentTouches = false
+        webView.scrollView.canCancelContentTouches = true
 
         context.coordinator.webView = webView
 
@@ -46,7 +60,6 @@ struct DiscordWebView: UIViewRepresentable {
     }
 
     func updateUIView(_ webView: WKWebView, context: Context) {
-        // When Vencord finishes downloading after first frame, inject + reload once
         if let js = model.vencordScript, !context.coordinator.didInjectVencord {
             context.coordinator.didInjectVencord = true
             let wrapped = Self.wrapVencord(js: js, css: model.vencordCSS)
@@ -60,8 +73,57 @@ struct DiscordWebView: UIViewRepresentable {
         }
     }
 
+    /// Force desktop layout + scale page to fit the phone width
+    static let bootScript = """
+    (function () {
+      try {
+        // Pretend we have a wide desktop viewport
+        var w = Math.max(1280, screen.width || 1280);
+
+        function applyViewport() {
+          var meta = document.querySelector('meta[name="viewport"]');
+          if (!meta) {
+            meta = document.createElement('meta');
+            meta.name = 'viewport';
+            (document.head || document.documentElement).appendChild(meta);
+          }
+          // Zoom out to fit desktop Discord on iPhone width
+          meta.content =
+            'width=' + w +
+            ', initial-scale=0.35, minimum-scale=0.25, maximum-scale=3, user-scalable=yes';
+        }
+
+        applyViewport();
+
+        // Keep re-applying (Discord rewrites head sometimes)
+        var obs = new MutationObserver(function () { applyViewport(); });
+        if (document.documentElement) {
+          obs.observe(document.documentElement, { childList: true, subtree: true });
+        }
+
+        // Prefer desktop CSS breakpoints
+        try {
+          Object.defineProperty(window, 'innerWidth', { get: function() { return w; } });
+          Object.defineProperty(window, 'outerWidth', { get: function() { return w; } });
+        } catch (e) {}
+
+        // Improve tap targets slightly
+        var style = document.createElement('style');
+        style.id = 'venicanary-touch';
+        style.textContent = [
+          'html, body { -webkit-text-size-adjust: 100% !important; }',
+          '* { -webkit-tap-highlight-color: rgba(88,101,242,0.25); }',
+          'button, a, [role="button"], [role="menuitem"], [class*="clickable"] {',
+          '  cursor: pointer !important;',
+          '}',
+        ].join('\n');
+        (document.documentElement || document).appendChild(style);
+      } catch (e) {}
+    })();
+    """
+
     static func wrapVencord(js: String, css: String?) -> String {
-        var parts: [String] = []
+        var parts: [String] = [bootScript]
         if let css, !css.isEmpty {
             let escaped = css
                 .replacingOccurrences(of: "\\", with: "\\\\")
@@ -91,6 +153,23 @@ struct DiscordWebView: UIViewRepresentable {
             self.model = model
         }
 
+        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+            // Extra zoom-out after load (pinches still work)
+            let js = """
+            (function(){
+              try {
+                var meta = document.querySelector('meta[name="viewport"]');
+                if (meta) {
+                  meta.content = 'width=1280, initial-scale=0.35, minimum-scale=0.25, maximum-scale=3, user-scalable=yes';
+                }
+                // Scroll to top-left
+                window.scrollTo(0,0);
+              } catch(e) {}
+            })();
+            """
+            webView.evaluateJavaScript(js, completionHandler: nil)
+        }
+
         func webView(
             _ webView: WKWebView,
             decidePolicyFor navigationAction: WKNavigationAction,
@@ -100,7 +179,6 @@ struct DiscordWebView: UIViewRepresentable {
                 decisionHandler(.allow)
                 return
             }
-            // Keep discord / vencord / captcha in-app; open others outside
             let host = url.host?.lowercased() ?? ""
             let allowed = [
                 "discord.com", "discordapp.com", "discord.gg",
