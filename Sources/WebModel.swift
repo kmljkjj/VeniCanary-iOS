@@ -114,7 +114,6 @@ final class WebModel: NSObject, ObservableObject {
         log("ERROR Vencord download failed")
     }
 
-    /// CSS + meta to make desktop UI usable on iPhone 14 Plus
     func desktopLayoutFixJS() -> String {
         let scale = AppConfig.viewportScale
         return """
@@ -127,16 +126,11 @@ final class WebModel: NSObject, ObservableObject {
               document.head.appendChild(meta);
             }
             meta.content = 'width=1180, initial-scale=\(scale), maximum-scale=3, user-scalable=yes';
-
             var id = 'veni-desktop-css';
             if (!document.getElementById(id)) {
               var st = document.createElement('style');
               st.id = id;
-              st.textContent = `
-                html, body { min-width: 1180px !important; }
-                /* reduce sticky mobile-only chrome if any */
-                [class*="mobile"] { }
-              `;
+              st.textContent = 'html, body { min-width: 1180px !important; }';
               document.head.appendChild(st);
             }
             return 'layout-ok scale=\(scale)';
@@ -164,15 +158,14 @@ final class WebModel: NSObject, ObservableObject {
 
         applyDesktopLayout(into: webView)
 
-        // Inject via <script> tag (more reliable than evaluate of huge string alone)
         let b64 = Data(vencordJS.utf8).base64EncodedString()
         let forceLit = force ? "true" : "false"
         let loader = """
         (function(){
           if (!\(forceLit) && window.__veniVencordInjected) return 'already';
           try {
-            var s = document.getElementById('veni-vencord');
-            if (s) s.remove();
+            var old = document.getElementById('veni-vencord');
+            if (old) old.remove();
             var el = document.createElement('script');
             el.id = 'veni-vencord';
             el.textContent = atob('\(b64)');
@@ -188,7 +181,6 @@ final class WebModel: NSObject, ObservableObject {
         webView.evaluateJavaScript(loader) { [weak self] result, err in
             if let err = err {
                 self?.log("inject error: \(err.localizedDescription)")
-                // fallback: direct eval truncated path already tried via script tag
                 return
             }
             let r = String(describing: result ?? "")
@@ -215,9 +207,8 @@ final class WebModel: NSObject, ObservableObject {
             self.isLoading = false
         }
         log("didFinish \(u)")
-        guard let wv = webView else { return }
+        guard webView != nil else { return }
 
-        // Multiple passes — Discord SPA loads late
         for delay in [0.3, 1.0, 2.5, 5.0, 8.0] {
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
                 guard let self = self, let wv = self.webView else { return }

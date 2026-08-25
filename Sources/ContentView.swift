@@ -28,9 +28,7 @@ struct ContentView: View {
                 .background(Color(red: 0.17, green: 0.18, blue: 0.21).opacity(0.92))
             }
 
-            Button {
-                showConsole.toggle()
-            } label: {
+            Button(action: { showConsole.toggle() }) {
                 Image(systemName: showConsole ? "xmark.circle.fill" : "terminal.fill")
                     .font(.system(size: 18, weight: .semibold))
                     .foregroundColor(.white.opacity(0.95))
@@ -42,17 +40,26 @@ struct ContentView: View {
             .padding(.bottom, 36)
 
             if showConsole {
-                consolePanel
-                    .padding(.bottom, 78)
-                    .padding(.horizontal, 8)
+                ConsoleSheet(
+                    model: model,
+                    jsInput: $jsInput,
+                    onClose: { showConsole = false }
+                )
+                .padding(.bottom, 78)
+                .padding(.horizontal, 8)
             }
         }
         .animation(.easeInOut(duration: 0.2), value: showConsole)
     }
+}
 
-    private var consoleBag: some View {
+struct ConsoleSheet: View {
+    @ObservedObject var model: WebModel
+    @Binding var jsInput: String
+    var onClose: () -> Void
+
+    var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            // Header status
             VStack(alignment: .leading, spacing: 4) {
                 HStack {
                     Text("Console")
@@ -62,7 +69,7 @@ struct ContentView: View {
                     Button("Clear") { model.clearLogs() }
                         .font(.caption.weight(.semibold))
                         .foregroundColor(.cyan)
-                    Button { showConsole = false } label: {
+                    Button(action: onClose) {
                         Image(systemName: "xmark")
                             .foregroundColor(.white.opacity(0.8))
                     }
@@ -81,15 +88,16 @@ struct ContentView: View {
 
             Divider().background(Color.white.opacity(0.12))
 
-            // Action buttons
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 6) {
-                    consoleBtn("Re-inject", color: .cyan) { model.forceReinject() }
-                    consoleBtn("Check VC", color: .green) { model.checkVencord() }
-                    consoleBtn("Reload", color: .orange) { model.reload() }
-                    consoleBtn("Canary", color: .purple) { model.goCanary() }
-                    consoleBtn("Layout", color: .mint) {
-                        if let wv = model.webView { model.applyDesktopLayout(into: wv) }
+                    chip("Re-inject", .cyan) { model.forceReinject() }
+                    chip("Check VC", .green) { model.checkVencord() }
+                    chip("Reload", .orange) { model.reload() }
+                    chip("Canary", .purple) { model.goCanary() }
+                    chip("Layout", .mint) {
+                        if let wv = model.webView {
+                            model.applyDesktopLayout(into: wv)
+                        }
                     }
                 }
                 .padding(.horizontal, 10)
@@ -98,7 +106,6 @@ struct ContentView: View {
 
             Divider().background(Color.white.opacity(0.12))
 
-            // Logs
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 3) {
@@ -114,7 +121,7 @@ struct ContentView: View {
                 }
                 .onChange(of: model.logs.count) { _ in
                     if let last = model.logs.indices.last {
-                        proxy.scrollTo(last, anchor: .bottom)
+                        withAnimation { proxy.scrollTo(last, anchor: .bottom) }
                     }
                 }
             }
@@ -122,7 +129,6 @@ struct ContentView: View {
 
             Divider().background(Color.white.opacity(0.12))
 
-            // JS eval like DevTools
             HStack(spacing: 6) {
                 TextField("JS…", text: $jsInput)
                     .textFieldStyle(.plain)
@@ -133,8 +139,7 @@ struct ContentView: View {
                     .cornerRadius(6)
                 Button("Run") {
                     let code = jsInput.trimmingCharacters(in: .whitespacesAndNewlines)
-                    guard !code.isEmpty else { return }
-                    model.evalJS(code)
+                    if !code.isEmpty { model.evalJS(code) }
                 }
                 .font(.caption.weight(.bold))
                 .foregroundColor(.black)
@@ -155,7 +160,7 @@ struct ContentView: View {
         )
     }
 
-    private func consoleBtn(_ title: String, color: Color, action: @escaping () -> Void) -> some View {
+    private func chip(_ title: String, _ color: Color, _ action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Text(title)
                 .font(.caption2.weight(.semibold))
@@ -171,7 +176,7 @@ struct ContentView: View {
         let l = line.lowercased()
         if l.contains("error") || l.contains("fail") { return .red.opacity(0.95) }
         if l.contains("ok") || l.contains("inject") || l.contains("loaded") { return .green.opacity(0.9) }
-        if l.hasPrefix("[") && l.contains("] >") { return .cyan.opacity(0.9) }
+        if l.contains("] >") { return .cyan.opacity(0.9) }
         return .white.opacity(0.82)
     }
 }
