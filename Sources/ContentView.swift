@@ -5,32 +5,23 @@ struct ContentView: View {
 
     var body: some View {
         ZStack {
-            Color.black.ignoresSafeArea()
+            Color(red: 0.17, green: 0.18, blue: 0.21).ignoresSafeArea()
 
-            // Only mount WebView once Vencord is downloaded (so injection is present at first load)
-            if model.ready {
-                DiscordWebView(model: model)
-            }
+            DiscordWebView(model: model)
+                .ignoresSafeArea()
 
-            if model.isLoading || !model.ready {
+            if model.isLoading {
                 VStack(spacing: 16) {
                     ProgressView()
-                        .progressViewStyle(CircularProgressViewStyle(tint: .yellow))
-                        .scaleEffect(1.3)
-                    Text("VeniCanary")
-                        .font(.headline)
-                        .foregroundColor(.white)
-                    Text(model.statusText)
-                        .font(.caption)
-                        .foregroundColor(.gray)
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal)
+                        .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                        .scaleEffect(1.4)
+                    Text("Canary + Vencord…")
+                        .foregroundColor(.white.opacity(0.85))
+                        .font(.subheadline)
                 }
-                .padding()
-                .background(Color.black.opacity(0.85))
-                .cornerRadius(16)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Color(red: 0.17, green: 0.18, blue: 0.21).opacity(0.92))
             }
         }
-        .onAppear { model.start() }
     }
 }

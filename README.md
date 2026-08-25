@@ -1,46 +1,39 @@
-# VeniCanary iOS
+# VeniCanary-iOS
 
-Client Discord **Canary** pour iPhone, dans l’esprit de **Vendroid** (Android) :
+Équivalent **iOS (IPA)** de [Vencord/Vendroid](https://github.com/Vencord/Vendroid), mais sur **Discord Canary** (pas Stable).
 
-- ouvre **https://canary.discord.com** dans une **WKWebView**
-- injecte **Vencord** (`browser.js`)
-- build GitHub Actions → **IPA non signée**
+## Principe (comme Vendroid)
 
-> Ce n’est **pas** l’app Discord App Store. C’est un shell web + Vencord, comme Vendroid.
+1. Ouvre `https://canary.discord.com/app` dans un **WKWebView**
+2. Injecte **Vencord** (`browser.js`)
+3. Build **IPA** non signée via GitHub Actions
 
-## Installation (iPhone)
+## Installer
 
-1. Actions → workflow **Build IPA** → artifact `VeniCanary.ipa`
-   ou Releases si un tag est poussé
-2. Installe avec **SideStore**, **AltStore**, **TrollStore**, etc.
-3. Tu signes avec **ton** Apple ID (l’IPA du CI n’est pas signée)
+1. Repo → **Actions** → **Build IPA** → Run workflow  
+2. Télécharge l’artifact `VeniCanary.ipa`  
+3. Signe / installe avec **TrollStore**, **AltStore**, **Sideloadly**, **Scarlet**, etc.
 
-## Build local (Mac + Xcode)
+## Différences vs Vendroid Android
 
-```bash
-brew install xcodegen
-xcodegen generate
-open VeniCanary.xcodeproj
-# Product → Archive, ou:
-xcodebuild -scheme VeniCanary -configuration Release \
-  -destination 'generic/platform=iOS' \
-  -archivePath build/VeniCanary.xcarchive archive
+| | Vendroid | VeniCanary-iOS |
+|--|----------|----------------|
+| Plateforme | Android APK | iOS IPA |
+| Discord | Stable `discord.com` | **Canary** `canary.discord.com` |
+| Moteur | WebView | WKWebView |
+| Mod | Vencord | Vencord |
+
+## Limites (web client)
+
+Comme Vendroid : pas de vraie app native Discord. Voix / notifs push limitées selon iOS et le site.
+
+## Structure
+
 ```
-
-## Réglages
-
-| URL Discord | `https://canary.discord.com/login` |
-|-------------|-------------------------------------|
-| Vencord     | `https://github.com/Vendicated/Vencord/releases/download/devbuild/browser.js` |
-
-Tu peux changer l’URL dans `Sources/Config.swift`.
-
-## Limites (comme Vendroid)
-
-- pas de VoIP / caméra natifs fiables
-- notifications iOS limitées (WebView)
-- dépend du site mobile/desktop web Discord
-
-## Licence
-
-MIT — Vencord reste sous sa propre licence (GPL).
+Sources/
+  App.swift
+  ContentView.swift
+  WebModel.swift
+project.yml          # XcodeGen
+.github/workflows/build-ipa.yml
+```
