@@ -24,7 +24,6 @@ struct ContentView: View {
                 .background(Color(red: 0.17, green: 0.18, blue: 0.21).opacity(0.9))
             }
 
-            // Petit bouton console (ne gêne presque pas)
             Button {
                 showConsole.toggle()
             } label: {
@@ -37,22 +36,17 @@ struct ContentView: View {
             }
             .padding(.trailing, 14)
             .padding(.bottom, 28)
-            .accessibilityLabel("Console")
 
             if showConsole {
-                ConsolePanel(model: model) {
-                    showConsole = false
-                }
-                .transition(.move(edge: .bottom).combined(with: .opacity))
-                .padding(.bottom, 70)
-                .padding(.horizontal, 10)
+                ConsolePanel(model: model) { showConsole = false }
+                    .padding(.bottom, 70)
+                    .padding(.horizontal, 10)
             }
         }
         .animation(.easeInOut(duration: 0.2), value: showConsole)
     }
 }
 
-/// Console légère façon DevTools (logs inject / URL / Vencord)
 struct ConsolePanel: View {
     @ObservedObject var model: WebModel
     var onClose: () -> Void
@@ -64,14 +58,10 @@ struct ConsolePanel: View {
                     .font(.headline)
                     .foregroundColor(.white)
                 Spacer()
-                Button("Clear") {
-                    model.clearLogs()
-                }
-                .font(.caption.weight(.semibold))
-                .foregroundColor(.cyan)
-                Button {
-                    onClose()
-                } label: {
+                Button("Clear") { model.clearLogs() }
+                    .font(.caption.weight(.semibold))
+                    .foregroundColor(.cyan)
+                Button(action: onClose) {
                     Image(systemName: "xmark")
                         .foregroundColor(.white.opacity(0.8))
                 }
@@ -105,25 +95,21 @@ struct ConsolePanel: View {
             Divider().background(Color.white.opacity(0.15))
 
             HStack(spacing: 8) {
-                Button("Re-inject Vencord") {
-                    model.forceReinject()
-                }
-                .font(.caption.weight(.semibold))
-                .foregroundColor(.black)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
-                .background(Color.cyan.opacity(0.9))
-                .cornerRadius(6)
+                Button("Re-inject Vencord") { model.forceReinject() }
+                    .font(.caption.weight(.semibold))
+                    .foregroundColor(.black)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(Color.cyan.opacity(0.9))
+                    .cornerRadius(6)
 
-                Button("Reload Canary") {
-                    model.reload()
-                }
-                .font(.caption.weight(.semibold))
-                .foregroundColor(.white)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
-                .background(Color.white.opacity(0.15))
-                .cornerRadius(6)
+                Button("Reload") { model.reload() }
+                    .font(.caption.weight(.semibold))
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(Color.white.opacity(0.15))
+                    .cornerRadius(6)
 
                 Spacer()
             }
@@ -140,12 +126,9 @@ struct ConsolePanel: View {
     }
 
     private func color(for line: String) -> Color {
-        if line.contains("error") || line.contains("ERROR") || line.contains("fail") {
-            return .red.opacity(0.9)
-        }
-        if line.contains("inject") || line.contains("OK") || line.contains("loaded") {
-            return .green.opacity(0.9)
-        }
+        let l = line.lowercased()
+        if l.contains("error") || l.contains("fail") { return .red.opacity(0.9) }
+        if l.contains("ok") || l.contains("inject") || l.contains("loaded") { return .green.opacity(0.9) }
         return .white.opacity(0.85)
     }
 }

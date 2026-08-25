@@ -3,7 +3,6 @@ options:
   bundleIdPrefix: app.venicanary
   deploymentTarget:
     iOS: "15.0"
-  # Force format compatible with Xcode 15.x (NOT objectVersion 77 / Xcode 16)
   xcodeVersion: "15.0"
   objectVersion: 56
   createIntermediateGroups: true
@@ -23,15 +22,10 @@ targets:
     platform: iOS
     sources:
       - path: Sources
+        excludes:
+          - "**/*.md"
     settings:
-      BASE_SDK: iphoneos
-      SUPPORTED_PLATFORMS: iphoneos
       PRODUCT_BUNDLE_IDENTIFIER: app.venicanary.ios
       PRODUCT_NAME: VeniCanary
-      GENERATE_INFOPLIST_FILE: YES
-      INFOPLIST_KEY_CFBundleDisplayName: VeniCanary
-      INFOPLIST_KEY_UILaunchScreen_Generation: YES
-      INFOPLIST_KEY_UISupportedInterfaceOrientations: "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
-      INFOPLIST_KEY_NSAppTransportSecurity_NSAllowsArbitraryLoads: YES
-      INFOPLIST_KEY_UIStatusBarStyle: UIStatusBarStyleLightContent
-      INFOPLIST_KEY_UIViewControllerBasedStatusBarAppearance: NO
+      INFOPLIST_FILE: Sources/Info.plist
+      GENERATE_INFOPLIST_FILE: NO
