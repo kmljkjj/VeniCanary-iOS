@@ -15,7 +15,6 @@ final class WebModel: NSObject, ObservableObject {
     private let maxLogs = 400
     private let maxErrors = 150
 
-    /// Bruit Discord web classique — pas des bugs VeniCanary
     private let ignoreErrorSubstrings = [
         "ResizeObserver loop",
         "Non-Error promise rejection",
@@ -25,7 +24,7 @@ final class WebModel: NSObject, ObservableObject {
     override init() {
         super.init()
         log("boot VeniCanary — desktop Canary")
-        log("viewport scale \(String(format: "%.3f", AppConfig.viewportScale))")
+        log("scale=\(String(format: "%.3f", AppConfig.viewportScale)) layout=\(AppConfig.viewportWidth)x\(Int(AppConfig.layoutHeight))")
         Task { await preloadVencord() }
     }
 
@@ -43,12 +42,9 @@ final class WebModel: NSObject, ObservableObject {
     }
 
     func logError(_ msg: String) {
-        // Filtrer le bruit connu
-        for ig in ignoreErrorSubstrings {
-            if msg.contains(ig) {
-                log("(ignored) \(msg.prefix(80))")
-                return
-            }
+        for ig in ignoreErrorSubstrings where msg.contains(ig) {
+            log("(ignored) \(msg.prefix(80))")
+            return
         }
         let f = DateFormatter()
         f.dateFormat = "HH:mm:ss.SSS"
@@ -77,8 +73,7 @@ final class WebModel: NSObject, ObservableObject {
     }
 
     func exportErrorsText() -> String {
-        if errors.isEmpty { return "(aucune erreur capturée)" }
-        return errors.joined(separator: "\n")
+        errors.isEmpty ? "(aucune erreur capturée)" : errors.joined(separator: "\n")
     }
 
     @MainActor
@@ -136,8 +131,7 @@ final class WebModel: NSObject, ObservableObject {
               injectedFlag: !!window.__veniVencordInjected,
               scriptTag: !!document.getElementById('veni-vencord'),
               plugins: p,
-              webpack: !!(window.webpackChunkdiscord_app || window.webpackChunk),
-              ua: (navigator.userAgent||'').slice(0, 60)
+              webpack: !!(window.webpackChunkdiscord_app || window.webpackChunk)
             });
           } catch(e) { return 'err:'+e; }
         })()
@@ -158,7 +152,7 @@ final class WebModel: NSObject, ObservableObject {
                     await MainActor.run {
                         self.vencordJS = s
                         self.vencordStatus = "ready (\(s.count) chars)"
-                        self.log("Vencord OK \(s.count) bytes from \(url.host ?? "")")
+                        self.log("Vencord OK \(s.count) bytes")
                     }
                     return
                 }
@@ -171,9 +165,11 @@ final class WebModel: NSObject, ObservableObject {
         logError("Vencord download failed")
     }
 
+    /// Dézoom fort + fond noir (letterbox) pour accéder top + bas
     func desktopLayoutFixJS() -> String {
         let scale = AppConfig.viewportScale
         let w = AppConfig.viewportWidth
+        let h = Int(AppConfig.layoutHeight)
         return """
         (function(){
           try {
@@ -183,15 +179,35 @@ final class WebModel: NSObject, ObservableObject {
               meta.name = 'viewport';
               (document.head||document.documentElement).appendChild(meta);
             }
-            meta.content = 'width=\(w), initial-scale=\(scale), maximum-scale=4, user-scalable=yes';
+            // width fixe desktop + scale bas = tout visible, bandes noires
+            meta.content = 'width=\(w), initial-scale=\(scale), minimum-scale=\(scale * 0.8), maximum-scale=3, user-scalable=yes';
+
             var id = 'veni-desktop-css';
-            if (!document.getElementById(id)) {
-              var st = document.createElement('style');
+            var st = document.getElementById(id);
+            if (!st) {
+              st = document.createElement('style');
               st.id = id;
-              st.textContent = 'html,body{min-width:\(w)px!important;}';
               (document.head||document.documentElement).appendChild(st);
             }
-            return 'layout-ok scale=\(scale)';
+            st.textContent = `
+              html {
+                background: #000 !important;
+                height: 100% !important;
+              }
+              body {
+                background: #000 !important;
+                min-width: \(w)px !important;
+                min-height: \(h)px !important;
+                margin: 0 !important;
+              }
+              /* évite que le bas soit collé sous l'home indicator trop serré */
+              #app-mount {
+                min-height: \(h)px !important;
+              }
+            `;
+            document.documentElement.style.background = '#000';
+            if (document.body) document.body.style.background = '#000';
+            return 'layout-ok scale=\(scale) w=\(w)';
           } catch(e) { return 'layout-err:'+e; }
         })();
         """
@@ -204,6 +220,29 @@ final class WebModel: NSObject, ObservableObject {
         }
     }
 
+    /// Boutons console : dézoom + / −
+    func adjustScale(factor: CGFloat) {
+        guard let wv = webView else { return }
+        let js = """
+        (function(){
+          try {
+            var m = document.querySelector('meta[name=viewport]');
+            if (!m) return 'no-meta';
+            var c = m.content || '';
+            var scale = 0.35;
+            var mm = c.match(/initial-scale=([0-9.]+)/);
+            if (mm) scale = parseFloat(mm[1]);
+            scale = Math.max(0.22, Math.min(0.7, scale * \(factor)));
+            m.content = 'width=\(AppConfig.viewportWidth), initial-scale=' + scale + ', maximum-scale=3, user-scalable=yes';
+            return 'scale=' + scale;
+          } catch(e) { return String(e); }
+        })();
+        """
+        wv.evaluateJavaScript(js) { [weak self] r, _ in
+            self?.log("zoom \(String(describing: r ?? ""))")
+        }
+    }
+
     func injectVencord(into webView: WKWebView, force: Bool = false) {
         if vencordJS.isEmpty {
             log("Vencord empty — redownload")
@@ -213,7 +252,6 @@ final class WebModel: NSObject, ObservableObject {
             }
             return
         }
-
         applyDesktopLayout(into: webView)
 
         let b64 = Data(vencordJS.utf8).base64EncodedString()
@@ -271,7 +309,6 @@ final class WebModel: NSObject, ObservableObject {
                 } else {
                     self?.vencordStatus = "injected → \(r)"
                     self?.log("Vencord inject OK (#\(self?.injectCount ?? 0)) \(r)")
-                    // Vérif différée (webpack ready)
                     DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
                         self?.checkVencord()
                     }
@@ -289,7 +326,7 @@ final class WebModel: NSObject, ObservableObject {
         log("didFinish \(u)")
         guard webView != nil else { return }
 
-        for delay in [0.5, 1.5, 3.0, 6.0, 10.0] {
+        for delay in [0.4, 1.2, 3.0, 6.0, 10.0] {
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
                 guard let self = self, let wv = self.webView else { return }
                 self.applyDesktopLayout(into: wv)
@@ -306,13 +343,11 @@ final class WebModel: NSObject, ObservableObject {
         } else {
             text = String(describing: body)
         }
-
         let lower = text.lowercased()
         if lower.hasPrefix("error") || text.contains("TypeError") || text.contains("ReferenceError") {
             logError(text)
         } else if lower.hasPrefix("warn") {
-            // warnings Discord (passkeys / media) → log only, not Errors tab
-            log(text.prefix(200).description)
+            log(String(text.prefix(200)))
         } else {
             log("js: \(text.prefix(250))")
         }

@@ -23,14 +23,14 @@ struct DiscordWebView: UIViewRepresentable {
         let scale = AppConfig.viewportScale
         let w = AppConfig.viewportWidth
 
-        // Early: viewport + error bridge
         let early = """
         (function(){
           window.__veniCanary = true;
           try {
             var m = document.querySelector('meta[name=viewport]');
             if (!m) { m = document.createElement('meta'); m.name='viewport'; document.documentElement.appendChild(m); }
-            m.content = 'width=\(w), initial-scale=\(scale), maximum-scale=4, user-scalable=yes';
+            m.content = 'width=\(w), initial-scale=\(scale), maximum-scale=3, user-scalable=yes';
+            document.documentElement.style.background = '#000';
           } catch(e) {}
           function send(msg) {
             try { window.webkit.messageHandlers.veniLog.postMessage(String(msg)); } catch(e) {}
@@ -68,11 +68,12 @@ struct DiscordWebView: UIViewRepresentable {
         wv.navigationDelegate = context.coordinator
         wv.uiDelegate = context.coordinator
         wv.scrollView.contentInsetAdjustmentBehavior = .never
-        wv.scrollView.minimumZoomScale = 0.25
-        wv.scrollView.maximumZoomScale = 4.0
+        wv.scrollView.minimumZoomScale = 0.2
+        wv.scrollView.maximumZoomScale = 3.0
         wv.scrollView.bouncesZoom = true
         wv.isOpaque = false
-        wv.backgroundColor = UIColor(red: 0.17, green: 0.18, blue: 0.21, alpha: 1)
+        wv.backgroundColor = .black
+        wv.scrollView.backgroundColor = .black
         wv.customUserAgent = AppConfig.desktopUserAgent
 
         DispatchQueue.main.async {
