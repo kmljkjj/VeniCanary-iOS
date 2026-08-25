@@ -15,10 +15,17 @@ final class WebModel: NSObject, ObservableObject {
     private let maxLogs = 400
     private let maxErrors = 150
 
+    /// Bruit Discord web classique — pas des bugs VeniCanary
+    private let ignoreErrorSubstrings = [
+        "ResizeObserver loop",
+        "Non-Error promise rejection",
+        "ResizeObserver",
+    ]
+
     override init() {
         super.init()
         log("boot VeniCanary — desktop Canary")
-        log("viewport scale \(String(format: "%.3f", AppConfig.viewportScale)) w=\(AppConfig.viewportWidth)")
+        log("viewport scale \(String(format: "%.3f", AppConfig.viewportScale))")
         Task { await preloadVencord() }
     }
 
@@ -36,6 +43,13 @@ final class WebModel: NSObject, ObservableObject {
     }
 
     func logError(_ msg: String) {
+        // Filtrer le bruit connu
+        for ig in ignoreErrorSubstrings {
+            if msg.contains(ig) {
+                log("(ignored) \(msg.prefix(80))")
+                return
+            }
+        }
         let f = DateFormatter()
         f.dateFormat = "HH:mm:ss.SSS"
         let line = "[\(f.string(from: Date()))] \(msg)"
@@ -62,7 +76,6 @@ final class WebModel: NSObject, ObservableObject {
         log("errors cleared")
     }
 
-    /// Texte à copier / envoyer pour debug
     func exportErrorsText() -> String {
         if errors.isEmpty { return "(aucune erreur capturée)" }
         return errors.joined(separator: "\n")
@@ -77,10 +90,7 @@ final class WebModel: NSObject, ObservableObject {
         webView.load(req)
     }
 
-    func reload() {
-        log("reload")
-        webView?.reload()
-    }
+    func reload() { log("reload"); webView?.reload() }
 
     func goCanary() {
         log("navigate → canary/app")
@@ -97,7 +107,7 @@ final class WebModel: NSObject, ObservableObject {
             if let err = err {
                 self?.logError("eval: \(err.localizedDescription)")
             } else {
-                self?.log("< \(String(describing: result ?? "undefined").prefix(200))")
+                self?.log("< \(String(describing: result ?? "undefined").prefix(300))")
             }
         }
     }
@@ -119,13 +129,17 @@ final class WebModel: NSObject, ObservableObject {
         evalJS("""
         (function(){
           try {
+            var p = 0;
+            try { p = Object.keys((window.Vencord&&window.Vencord.Plugins&&window.Vencord.Plugins.plugins)||{}).length; } catch(e){}
             return JSON.stringify({
-              vencord: !!window.Vencord,
-              plugins: window.Vencord && window.Vencord.Plugins ? Object.keys(window.Vencord.Plugins.plugins||{}).length : 0,
-              injected: !!window.__veniVencordInjected,
-              userAgent: navigator.userAgent.slice(0,80)
+              vencord: typeof window.Vencord !== 'undefined',
+              injectedFlag: !!window.__veniVencordInjected,
+              scriptTag: !!document.getElementById('veni-vencord'),
+              plugins: p,
+              webpack: !!(window.webpackChunkdiscord_app || window.webpackChunk),
+              ua: (navigator.userAgent||'').slice(0, 60)
             });
-          } catch(e) { return String(e); }
+          } catch(e) { return 'err:'+e; }
         })()
         """)
     }
@@ -154,7 +168,7 @@ final class WebModel: NSObject, ObservableObject {
             }
         }
         await MainActor.run { self.vencordStatus = "FAILED" }
-        logError("Vencord download failed — check network / GitHub")
+        logError("Vencord download failed")
     }
 
     func desktopLayoutFixJS() -> String {
@@ -202,42 +216,37 @@ final class WebModel: NSObject, ObservableObject {
 
         applyDesktopLayout(into: webView)
 
-        // Method A: script element + base64 (avoids huge evaluate string issues)
         let b64 = Data(vencordJS.utf8).base64EncodedString()
         let forceLit = force ? "true" : "false"
-
-        // Split base64 into chunks if needed for JS string limits — use array join
-        let chunkSize = 500_000
+        let chunkSize = 400_000
         var parts: [String] = []
-        var i = b64.startIndex
-        while i < b64.endIndex {
-            let j = b64.index(i, offsetBy: chunkSize, limitedBy: b64.endIndex) ?? b64.endIndex
-            parts.append(String(b64[i..<j]))
-            i = j
+        var idx = b64.startIndex
+        while idx < b64.endIndex {
+            let j = b64.index(idx, offsetBy: chunkSize, limitedBy: b64.endIndex) ?? b64.endIndex
+            parts.append(String(b64[idx..<j]))
+            idx = j
         }
         let partsJS = parts.map { "'\($0)'" }.joined(separator: ",")
 
         let loader = """
         (function(){
-          if (!\(forceLit) && window.__veniVencordInjected) return 'already';
+          if (!\(forceLit) && window.__veniVencordInjected && window.Vencord) return 'already';
           try {
             var old = document.getElementById('veni-vencord');
             if (old) old.remove();
-            var b64 = [\(partsJS)].join('');
-            var code = atob(b64);
+            var code = atob([\(partsJS)].join(''));
             var el = document.createElement('script');
             el.id = 'veni-vencord';
             el.textContent = code;
             (document.documentElement || document.head || document.body).appendChild(el);
             window.__veniVencordInjected = true;
-            return 'ok:' + code.length;
+            return 'ok-script:' + code.length + ':vencord=' + (typeof window.Vencord);
           } catch(e) {
             try {
-              // Method B: indirect eval
-              var b64 = [\(partsJS)].join('');
-              (0, eval)(atob(b64));
+              var code = atob([\(partsJS)].join(''));
+              (0, eval)(code);
               window.__veniVencordInjected = true;
-              return 'ok-eval';
+              return 'ok-eval:vencord=' + (typeof window.Vencord);
             } catch(e2) {
               return 'error:' + (e2 && e2.message ? e2.message : String(e2));
             }
@@ -260,8 +269,12 @@ final class WebModel: NSObject, ObservableObject {
                     self?.vencordStatus = r
                     self?.logError("inject \(r)")
                 } else {
-                    self?.vencordStatus = "injected OK"
+                    self?.vencordStatus = "injected → \(r)"
                     self?.log("Vencord inject OK (#\(self?.injectCount ?? 0)) \(r)")
+                    // Vérif différée (webpack ready)
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                        self?.checkVencord()
+                    }
                 }
             }
         }
@@ -276,7 +289,7 @@ final class WebModel: NSObject, ObservableObject {
         log("didFinish \(u)")
         guard webView != nil else { return }
 
-        for delay in [0.4, 1.2, 2.5, 5.0, 9.0] {
+        for delay in [0.5, 1.5, 3.0, 6.0, 10.0] {
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
                 guard let self = self, let wv = self.webView else { return }
                 self.applyDesktopLayout(into: wv)
@@ -285,20 +298,23 @@ final class WebModel: NSObject, ObservableObject {
         }
     }
 
-    /// Appelé depuis le bridge JS (console.error / window.onerror)
     func handleJSMessage(_ body: Any) {
         let text: String
-        if let s = body as? String {
-            text = s
-        } else if let d = body as? [String: Any] {
+        if let s = body as? String { text = s }
+        else if let d = body as? [String: Any] {
             text = (d["message"] as? String) ?? String(describing: d)
         } else {
             text = String(describing: body)
         }
-        if text.lowercased().contains("error") || text.hasPrefix("ERROR") || text.contains("TypeError") || text.contains("ReferenceError") {
+
+        let lower = text.lowercased()
+        if lower.hasPrefix("error") || text.contains("TypeError") || text.contains("ReferenceError") {
             logError(text)
+        } else if lower.hasPrefix("warn") {
+            // warnings Discord (passkeys / media) → log only, not Errors tab
+            log(text.prefix(200).description)
         } else {
-            log("js: \(text.prefix(300))")
+            log("js: \(text.prefix(250))")
         }
     }
 }
