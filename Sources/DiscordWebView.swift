@@ -17,21 +17,31 @@ struct DiscordWebView: UIViewRepresentable {
             config.defaultWebpagePreferences.allowsContentJavaScript = true
         }
 
+        // Desktop viewport as early as possible
+        let scale = AppConfig.viewportScale
+        let early = """
+        (function(){
+          window.__veniCanary = true;
+          var m = document.querySelector('meta[name=viewport]');
+          if (!m) { m = document.createElement('meta'); m.name='viewport'; document.documentElement.appendChild(m); }
+          m.content = 'width=1180, initial-scale=\(scale), maximum-scale=3, user-scalable=yes';
+        })();
+        """
         config.userContentController.addUserScript(
-            WKUserScript(
-                source: "window.__veniCanary = true;",
-                injectionTime: .atDocumentStart,
-                forMainFrameOnly: true
-            )
+            WKUserScript(source: early, injectionTime: .atDocumentStart, forMainFrameOnly: true)
         )
 
         let wv = WKWebView(frame: .zero, configuration: config)
         wv.navigationDelegate = context.coordinator
         wv.uiDelegate = context.coordinator
         wv.scrollView.contentInsetAdjustmentBehavior = .never
+        wv.scrollView.minimumZoomScale = 0.25
+        wv.scrollView.maximumZoomScale = 3.0
+        wv.scrollView.bounces = true
         wv.isOpaque = false
         wv.backgroundColor = UIColor(red: 0.17, green: 0.18, blue: 0.21, alpha: 1)
-        wv.customUserAgent = AppConfig.mobileUserAgent
+        // CRITICAL: desktop Discord, not mobile web
+        wv.customUserAgent = AppConfig.desktopUserAgent
 
         DispatchQueue.main.async {
             model.attach(wv)
@@ -47,7 +57,7 @@ struct DiscordWebView: UIViewRepresentable {
 
         func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
             DispatchQueue.main.async { self.model.isLoading = true }
-            model.log("navigation start…")
+            model.log("nav start")
         }
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
