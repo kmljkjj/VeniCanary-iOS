@@ -4,6 +4,7 @@ struct ContentView: View {
     @StateObject private var model = WebModel()
     @State private var showConsole = false
     @State private var jsInput = ""
+    @State private var consoleTab = 0 // 0 = Logs, 1 = Errors
 
     var body: some View {
         ZStack(alignment: .bottomTrailing) {
@@ -29,12 +30,23 @@ struct ContentView: View {
             }
 
             Button(action: { showConsole.toggle() }) {
-                Image(systemName: showConsole ? "xmark.circle.fill" : "terminal.fill")
-                    .font(.system(size: 18, weight: .semibold))
-                    .foregroundColor(.white.opacity(0.95))
-                    .padding(11)
-                    .background(Color.black.opacity(0.5))
-                    .clipShape(Circle())
+                ZStack(alignment: .topTrailing) {
+                    Image(systemName: showConsole ? "xmark.circle.fill" : "terminal.fill")
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundColor(.white.opacity(0.95))
+                        .padding(11)
+                        .background(Color.black.opacity(0.5))
+                        .clipShape(Circle())
+                    if !model.errors.isEmpty && !showConsole {
+                        Text("\(min(model.errors.count, 99))")
+                            .font(.system(size: 9, weight: .bold))
+                            .foregroundColor(.white)
+                            .padding(3)
+                            .background(Color.red)
+                            .clipShape(Circle())
+                            .offset(x: 4, y: -4)
+                    }
+                }
             }
             .padding(.trailing, 12)
             .padding(.bottom, 36)
@@ -43,6 +55,7 @@ struct ContentView: View {
                 ConsoleSheet(
                     model: model,
                     jsInput: $jsInput,
+                    consoleTab: $consoleTab,
                     onClose: { showConsole = false }
                 )
                 .padding(.bottom, 78)
@@ -56,19 +69,23 @@ struct ContentView: View {
 struct ConsoleSheet: View {
     @ObservedObject var model: WebModel
     @Binding var jsInput: String
+    @Binding var consoleTab: Int
     var onClose: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
+            // Header
             VStack(alignment: .leading, spacing: 4) {
                 HStack {
                     Text("Console")
                         .font(.headline)
                         .foregroundColor(.white)
                     Spacer()
-                    Button("Clear") { model.clearLogs() }
-                        .font(.caption.weight(.semibold))
-                        .foregroundColor(.cyan)
+                    Button(consoleTab == 0 ? "Clear" : "Clear errors") {
+                        if consoleTab == 0 { model.clearLogs() } else { model.clearErrors() }
+                    }
+                    .font(.caption.weight(.semibold))
+                    .foregroundColor(.cyan)
                     Button(action: onClose) {
                         Image(systemName: "xmark")
                             .foregroundColor(.white.opacity(0.8))
@@ -84,10 +101,18 @@ struct ConsoleSheet: View {
             }
             .padding(.horizontal, 12)
             .padding(.top, 10)
-            .padding(.bottom, 8)
+            .padding(.bottom, 6)
+
+            // Tabs Logs | Errors
+            HStack(spacing: 0) {
+                tabButton("Logs", index: 0, badge: nil)
+                tabButton("Errors", index: 1, badge: model.errors.count)
+            }
+            .padding(.horizontal, 8)
 
             Divider().background(Color.white.opacity(0.12))
 
+            // Actions
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 6) {
                     chip("Re-inject", .cyan) { model.forceReinject() }
@@ -95,8 +120,12 @@ struct ConsoleSheet: View {
                     chip("Reload", .orange) { model.reload() }
                     chip("Canary", .purple) { model.goCanary() }
                     chip("Layout", .mint) {
-                        if let wv = model.webView {
-                            model.applyDesktopLayout(into: wv)
+                        if let wv = model.webView { model.applyDesktopLayout(into: wv) }
+                    }
+                    if consoleTab == 1 {
+                        chip("Copy errors", .red) {
+                            UIPasteboard.general.string = model.exportErrorsText()
+                            model.log("errors copied to clipboard")
                         }
                     }
                 }
@@ -106,13 +135,21 @@ struct ConsoleSheet: View {
 
             Divider().background(Color.white.opacity(0.12))
 
+            // Content
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 3) {
-                        ForEach(Array(model.logs.enumerated()), id: \.offset) { i, line in
+                        let lines = consoleTab == 0 ? model.logs : model.errors
+                        if lines.isEmpty {
+                            Text(consoleTab == 0 ? "(pas de logs)" : "(aucune erreur — bien)")
+                                .font(.system(size: 11, design: .monospaced))
+                                .foregroundColor(.white.opacity(0.4))
+                                .padding(8)
+                        }
+                        ForEach(Array(lines.enumerated()), id: \.offset) { i, line in
                             Text(line)
                                 .font(.system(size: 10, design: .monospaced))
-                                .foregroundColor(logColor(line))
+                                .foregroundColor(consoleTab == 1 ? Color.red.opacity(0.95) : logColor(line))
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .id(i)
                         }
@@ -120,12 +157,17 @@ struct ConsoleSheet: View {
                     .padding(8)
                 }
                 .onChange(of: model.logs.count) { _ in
-                    if let last = model.logs.indices.last {
-                        withAnimation { proxy.scrollTo(last, anchor: .bottom) }
+                    if consoleTab == 0, let last = model.logs.indices.last {
+                        proxy.scrollTo(last, anchor: .bottom)
+                    }
+                }
+                .onChange(of: model.errors.count) { _ in
+                    if consoleTab == 1, let last = model.errors.indices.last {
+                        proxy.scrollTo(last, anchor: .bottom)
                     }
                 }
             }
-            .frame(height: 160)
+            .frame(height: 150)
 
             Divider().background(Color.white.opacity(0.12))
 
@@ -152,12 +194,37 @@ struct ConsoleSheet: View {
         }
         .background(
             RoundedRectangle(cornerRadius: 14)
-                .fill(Color.black.opacity(0.88))
+                .fill(Color.black.opacity(0.9))
                 .overlay(
                     RoundedRectangle(cornerRadius: 14)
                         .stroke(Color.white.opacity(0.12), lineWidth: 1)
                 )
         )
+    }
+
+    private func tabButton(_ title: String, index: Int, badge: Int?) -> some View {
+        Button {
+            consoleTab = index
+        } label: {
+            HStack(spacing: 4) {
+                Text(title)
+                    .font(.caption.weight(.semibold))
+                if let b = badge, b > 0 {
+                    Text("\(b)")
+                        .font(.system(size: 9, weight: .bold))
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 1)
+                        .background(Color.red)
+                        .foregroundColor(.white)
+                        .clipShape(Capsule())
+                }
+            }
+            .foregroundColor(consoleTab == index ? .white : .white.opacity(0.5))
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 8)
+            .background(consoleTab == index ? Color.white.opacity(0.12) : Color.clear)
+            .cornerRadius(6)
+        }
     }
 
     private func chip(_ title: String, _ color: Color, _ action: @escaping () -> Void) -> some View {
@@ -174,7 +241,7 @@ struct ConsoleSheet: View {
 
     private func logColor(_ line: String) -> Color {
         let l = line.lowercased()
-        if l.contains("error") || l.contains("fail") { return .red.opacity(0.95) }
+        if l.contains("error") || l.contains("fail") || l.hasPrefix("err ") { return .red.opacity(0.95) }
         if l.contains("ok") || l.contains("inject") || l.contains("loaded") { return .green.opacity(0.9) }
         if l.contains("] >") { return .cyan.opacity(0.9) }
         return .white.opacity(0.82)

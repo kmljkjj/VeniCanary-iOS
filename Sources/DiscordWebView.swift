@@ -17,30 +17,62 @@ struct DiscordWebView: UIViewRepresentable {
             config.defaultWebpagePreferences.allowsContentJavaScript = true
         }
 
-        // Desktop viewport as early as possible
+        let ucc = config.userContentController
+        ucc.add(context.coordinator, name: "veniLog")
+
         let scale = AppConfig.viewportScale
+        let w = AppConfig.viewportWidth
+
+        // Early: viewport + error bridge
         let early = """
         (function(){
           window.__veniCanary = true;
-          var m = document.querySelector('meta[name=viewport]');
-          if (!m) { m = document.createElement('meta'); m.name='viewport'; document.documentElement.appendChild(m); }
-          m.content = 'width=1180, initial-scale=\(scale), maximum-scale=3, user-scalable=yes';
+          try {
+            var m = document.querySelector('meta[name=viewport]');
+            if (!m) { m = document.createElement('meta'); m.name='viewport'; document.documentElement.appendChild(m); }
+            m.content = 'width=\(w), initial-scale=\(scale), maximum-scale=4, user-scalable=yes';
+          } catch(e) {}
+          function send(msg) {
+            try { window.webkit.messageHandlers.veniLog.postMessage(String(msg)); } catch(e) {}
+          }
+          window.onerror = function(message, source, lineno, colno, error) {
+            send('ERROR ' + message + ' @' + (source||'') + ':' + lineno + ':' + colno);
+            return false;
+          };
+          window.addEventListener('unhandledrejection', function(ev) {
+            send('ERROR unhandledrejection ' + (ev.reason && ev.reason.message ? ev.reason.message : String(ev.reason)));
+          });
+          var origErr = console.error;
+          console.error = function() {
+            try {
+              var args = Array.prototype.slice.call(arguments).map(function(a){
+                try { return typeof a === 'object' ? JSON.stringify(a) : String(a); } catch(e) { return String(a); }
+              });
+              send('ERROR console ' + args.join(' '));
+            } catch(e) {}
+            return origErr.apply(console, arguments);
+          };
+          var origWarn = console.warn;
+          console.warn = function() {
+            try {
+              var args = Array.prototype.slice.call(arguments).map(String);
+              send('WARN ' + args.join(' '));
+            } catch(e) {}
+            return origWarn.apply(console, arguments);
+          };
         })();
         """
-        config.userContentController.addUserScript(
-            WKUserScript(source: early, injectionTime: .atDocumentStart, forMainFrameOnly: true)
-        )
+        ucc.addUserScript(WKUserScript(source: early, injectionTime: .atDocumentStart, forMainFrameOnly: false))
 
         let wv = WKWebView(frame: .zero, configuration: config)
         wv.navigationDelegate = context.coordinator
         wv.uiDelegate = context.coordinator
         wv.scrollView.contentInsetAdjustmentBehavior = .never
         wv.scrollView.minimumZoomScale = 0.25
-        wv.scrollView.maximumZoomScale = 3.0
-        wv.scrollView.bounces = true
+        wv.scrollView.maximumZoomScale = 4.0
+        wv.scrollView.bouncesZoom = true
         wv.isOpaque = false
         wv.backgroundColor = UIColor(red: 0.17, green: 0.18, blue: 0.21, alpha: 1)
-        // CRITICAL: desktop Discord, not mobile web
         wv.customUserAgent = AppConfig.desktopUserAgent
 
         DispatchQueue.main.async {
@@ -51,9 +83,18 @@ struct DiscordWebView: UIViewRepresentable {
 
     func updateUIView(_ uiView: WKWebView, context: Context) {}
 
-    final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate {
+    final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler {
         let model: WebModel
         init(model: WebModel) { self.model = model }
+
+        func userContentController(
+            _ userContentController: WKUserContentController,
+            didReceive message: WKScriptMessage
+        ) {
+            if message.name == "veniLog" {
+                model.handleJSMessage(message.body)
+            }
+        }
 
         func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
             DispatchQueue.main.async { self.model.isLoading = true }
@@ -65,7 +106,16 @@ struct DiscordWebView: UIViewRepresentable {
         }
 
         func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
-            model.log("nav fail: \(error.localizedDescription)")
+            model.logError("nav fail: \(error.localizedDescription)")
+            DispatchQueue.main.async { self.model.isLoading = false }
+        }
+
+        func webView(
+            _ webView: WKWebView,
+            didFailProvisionalNavigation navigation: WKNavigation!,
+            withError error: Error
+        ) {
+            model.logError("provisional fail: \(error.localizedDescription)")
             DispatchQueue.main.async { self.model.isLoading = false }
         }
 
