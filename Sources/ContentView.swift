@@ -7,8 +7,7 @@ struct ContentView: View {
     @State private var consoleTab = 0
 
     var body: some View {
-        ZStack(alignment: .bottomTrailing) {
-            // Fond noir = bandes / letterbox
+        ZStack {
             Color.black.ignoresSafeArea()
 
             DiscordWebView(model: model)
@@ -30,6 +29,20 @@ struct ContentView: View {
                 .background(Color.black.opacity(0.92))
             }
 
+            // Boutons Haut / Bas — toujours accessibles
+            VStack(spacing: 10) {
+                navBtn(system: "chevron.up", label: "Haut") {
+                    model.scrollToTop()
+                }
+                navBtn(system: "chevron.down", label: "Bas") {
+                    model.scrollToBottom()
+                }
+            }
+            .padding(.leading, 10)
+            .padding(.bottom, 120)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+
+            // Console
             Button(action: { showConsole.toggle() }) {
                 ZStack(alignment: .topTrailing) {
                     Image(systemName: showConsole ? "xmark.circle.fill" : "terminal.fill")
@@ -51,6 +64,7 @@ struct ContentView: View {
             }
             .padding(.trailing, 12)
             .padding(.bottom, 36)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
 
             if showConsole {
                 ConsoleSheet(
@@ -61,9 +75,29 @@ struct ContentView: View {
                 )
                 .padding(.bottom, 78)
                 .padding(.horizontal, 8)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
             }
         }
         .animation(.easeInOut(duration: 0.2), value: showConsole)
+    }
+
+    private func navBtn(system: String, label: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            VStack(spacing: 2) {
+                Image(systemName: system)
+                    .font(.system(size: 16, weight: .bold))
+                Text(label)
+                    .font(.system(size: 9, weight: .semibold))
+            }
+            .foregroundColor(.white)
+            .frame(width: 48, height: 48)
+            .background(Color.black.opacity(0.55))
+            .clipShape(RoundedRectangle(cornerRadius: 12))
+            .overlay(
+                RoundedRectangle(cornerRadius: 12)
+                    .stroke(Color.white.opacity(0.2), lineWidth: 1)
+            )
+        }
     }
 }
 
@@ -119,9 +153,10 @@ struct ConsoleSheet: View {
                     chip("Layout", .mint) {
                         if let wv = model.webView { model.applyDesktopLayout(into: wv) }
                     }
-                    // Zoom manuel
                     chip("Zoom −", .gray) { model.adjustScale(factor: 0.85) }
                     chip("Zoom +", .gray) { model.adjustScale(factor: 1.15) }
+                    chip("↑ Haut", .blue) { model.scrollToTop() }
+                    chip("↓ Bas", .blue) { model.scrollToBottom() }
                     if consoleTab == 1 {
                         chip("Copy errors", .red) {
                             UIPasteboard.general.string = model.exportErrorsText()

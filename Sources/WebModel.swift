@@ -24,7 +24,7 @@ final class WebModel: NSObject, ObservableObject {
     override init() {
         super.init()
         log("boot VeniCanary — desktop Canary")
-        log("scale=\(String(format: "%.3f", AppConfig.viewportScale)) layout=\(AppConfig.viewportWidth)x\(Int(AppConfig.layoutHeight))")
+        log("scale=\(String(format: "%.3f", AppConfig.viewportScale))")
         Task { await preloadVencord() }
     }
 
@@ -90,6 +90,64 @@ final class WebModel: NSObject, ObservableObject {
     func goCanary() {
         log("navigate → canary/app")
         webView?.load(URLRequest(url: AppConfig.canaryURL))
+    }
+
+    /// Scroll / pan vers le HAUT de la page Discord
+    func scrollToTop() {
+        guard let wv = webView else { return }
+        log("→ Haut")
+        // 1) UIScrollView natif
+        DispatchQueue.main.async {
+            let sv = wv.scrollView
+            sv.setContentOffset(CGPoint(x: sv.contentOffset.x, y: -sv.adjustedContentInset.top), animated: true)
+        }
+        // 2) JS fallback (window + conteneurs Discord)
+        wv.evaluateJavaScript("""
+        (function(){
+          try {
+            window.scrollTo({top:0,left:0,behavior:'smooth'});
+            document.documentElement.scrollTop = 0;
+            document.body.scrollTop = 0;
+            var nodes = document.querySelectorAll('[class*="scroller"], [class*="auto-"], main, #app-mount');
+            for (var i=0;i<nodes.length;i++) {
+              try { nodes[i].scrollTop = 0; } catch(e){}
+            }
+            return 'top-ok';
+          } catch(e) { return String(e); }
+        })();
+        """, completionHandler: nil)
+    }
+
+    /// Scroll / pan vers le BAS (barre utilisateur, input, etc.)
+    func scrollToBottom() {
+        guard let wv = webView else { return }
+        log("→ Bas")
+        DispatchQueue.main.async {
+            let sv = wv.scrollView
+            let maxY = max(0, sv.contentSize.height - sv.bounds.height + sv.adjustedContentInset.bottom)
+            sv.setContentOffset(CGPoint(x: sv.contentOffset.x, y: maxY), animated: true)
+        }
+        wv.evaluateJavaScript("""
+        (function(){
+          try {
+            var h = Math.max(
+              document.body.scrollHeight||0,
+              document.documentElement.scrollHeight||0
+            );
+            window.scrollTo({top:h,left:0,behavior:'smooth'});
+            document.documentElement.scrollTop = h;
+            document.body.scrollTop = h;
+            var nodes = document.querySelectorAll('[class*="scroller"], [class*="auto-"]');
+            for (var i=0;i<nodes.length;i++) {
+              try {
+                var el = nodes[i];
+                el.scrollTop = el.scrollHeight;
+              } catch(e){}
+            }
+            return 'bottom-ok';
+          } catch(e) { return String(e); }
+        })();
+        """, completionHandler: nil)
     }
 
     func evalJS(_ code: String) {
@@ -165,7 +223,6 @@ final class WebModel: NSObject, ObservableObject {
         logError("Vencord download failed")
     }
 
-    /// Dézoom fort + fond noir (letterbox) pour accéder top + bas
     func desktopLayoutFixJS() -> String {
         let scale = AppConfig.viewportScale
         let w = AppConfig.viewportWidth
@@ -179,9 +236,7 @@ final class WebModel: NSObject, ObservableObject {
               meta.name = 'viewport';
               (document.head||document.documentElement).appendChild(meta);
             }
-            // width fixe desktop + scale bas = tout visible, bandes noires
             meta.content = 'width=\(w), initial-scale=\(scale), minimum-scale=\(scale * 0.8), maximum-scale=3, user-scalable=yes';
-
             var id = 'veni-desktop-css';
             var st = document.getElementById(id);
             if (!st) {
@@ -190,24 +245,13 @@ final class WebModel: NSObject, ObservableObject {
               (document.head||document.documentElement).appendChild(st);
             }
             st.textContent = `
-              html {
-                background: #000 !important;
-                height: 100% !important;
-              }
-              body {
-                background: #000 !important;
-                min-width: \(w)px !important;
-                min-height: \(h)px !important;
-                margin: 0 !important;
-              }
-              /* évite que le bas soit collé sous l'home indicator trop serré */
-              #app-mount {
-                min-height: \(h)px !important;
-              }
+              html { background:#000!important; height:100%!important; }
+              body { background:#000!important; min-width:\(w)px!important; min-height:\(h)px!important; margin:0!important; }
+              #app-mount { min-height:\(h)px!important; }
             `;
             document.documentElement.style.background = '#000';
             if (document.body) document.body.style.background = '#000';
-            return 'layout-ok scale=\(scale) w=\(w)';
+            return 'layout-ok scale=\(scale)';
           } catch(e) { return 'layout-err:'+e; }
         })();
         """
@@ -220,7 +264,6 @@ final class WebModel: NSObject, ObservableObject {
         }
     }
 
-    /// Boutons console : dézoom + / −
     func adjustScale(factor: CGFloat) {
         guard let wv = webView else { return }
         let js = """
