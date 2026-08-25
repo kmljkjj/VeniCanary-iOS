@@ -1,72 +1,152 @@
 import Foundation
 import WebKit
 import Combine
+import SwiftUI
 
-/// Vendroid-style: load Discord web + inject Vencord.
-/// Target = Canary (not stable).
+/// Vendroid-style: Canary web + Vencord inject + petite console logs
 final class WebModel: NSObject, ObservableObject {
     @Published var isLoading = true
+    @Published var logs: [String] = []
 
     let canaryURL = URL(string: "https://canary.discord.com/login")!
-    private let vencordURL = URL(string: "https://github.com/Vendicated/Vencord/releases/download/devbuild/browser.js")!
-    // Fallback CDN-style build used by many web injectors
-    private let vencordFallback = URL(string: "https://raw.githubusercontent.com/Vencord/builds/main/browser.js")!
+    private let vencordURLs: [URL] = [
+        URL(string: "https://raw.githubusercontent.com/Vencord/builds/main/browser.js")!,
+        URL(string: "https://github.com/Vendicated/Vencord/releases/download/devbuild/browser.js")!,
+    ]
 
     private(set) var vencordJS: String = ""
-    var webView: WKWebView?
+    weak var webView: WKWebView?
+
+    private let maxLogs = 200
 
     override init() {
         super.init()
+        log("VeniCanary start — target Canary")
         Task { await preloadVencord() }
+    }
+
+    func log(_ msg: String) {
+        let line = "[\(timeStamp())] \(msg)"
+        DispatchQueue.main.async {
+            self.logs.append(line)
+            if self.logs.count > self.maxLogs {
+                self.logs.removeFirst(self.logs.count - self.maxLogs)
+            }
+        }
+        print(line)
+    }
+
+    func clearLogs() {
+        logs.removeAll()
+        log("console cleared")
+    }
+
+    private func timeStamp() -> String {
+        let f = DateFormatter()
+        f.dateFormat = "HH:mm:ss"
+        return f.string(from: Date())
     }
 
     @MainActor
     func attach(_ webView: WKWebView) {
         self.webView = webView
+        log("WebView attached → load Canary")
         var req = URLRequest(url: canaryURL)
         req.cachePolicy = .reloadIgnoringLocalCacheData
         webView.load(req)
     }
 
+    func reload() {
+        log("Reload Canary")
+        webView?.reload()
+    }
+
+    func forceReinject() {
+        guard let wv = webView else {
+            log("ERROR no webview")
+            return
+        }
+        log("Force re-inject Vencord…")
+        // reset guard
+        wv.evaluateJavaScript("window.__veniVencordInjected = false") { [weak self] _, _ in
+            self?.injectVencord(into: wv, force: true)
+        }
+    }
+
     func preloadVencord() async {
-        for url in [vencordFallback, vencordURL] {
+        for url in vencordURLs {
             do {
+                log("Fetch Vencord \(url.host ?? "")…")
                 var req = URLRequest(url: url)
                 req.setValue("Mozilla/5.0", forHTTPHeaderField: "User-Agent")
-                let (data, _) = try await URLSession.shared.data(for: req)
-                if let s = String(data: data, encoding: .utf8), s.count > 500 {
-                    await MainActor.run { self.vencordJS = s }
-                    print("[VeniCanary] Vencord loaded from", url.absoluteString, s.count)
+                req.timeoutInterval = 30
+                let (data, resp) = try await URLSession.shared.data(for: req)
+                let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
+                if let s = String(data: data, encoding: .utf8), s.count > 500, code == 200 || code == 0 {
+                    await MainActor.run {
+                        self.vencordJS = s
+                        self.log("Vencord loaded OK (\(s.count) chars) from \(url.host ?? "")")
+                    }
                     return
                 }
+                log("Vencord bad response code=\(code) size=\(data.count)")
             } catch {
-                print("[VeniCanary] Vencord fetch fail", url, error)
+                log("Vencord fetch fail: \(error.localizedDescription)")
+            }
+        }
+        log("ERROR could not load Vencord")
+    }
+
+    func injectVencord(into webView: WKWebView, force: Bool = false) {
+        if vencordJS.isEmpty {
+            log("Vencord empty — retry download")
+            Task {
+                await preloadVencord()
+                await MainActor.run { self.injectVencord(into: webView, force: force) }
+            }
+            return
+        }
+
+        let wrapped = """
+        (function(){
+          if (!\(force ? "true" : "false") && window.__veniVencordInjected) {
+            return 'already';
+          }
+          window.__veniVencordInjected = true;
+          try {
+            \(vencordJS)
+            return 'ok';
+          } catch(e) {
+            return 'error:' + (e && e.message ? e.message : String(e));
+          }
+        })();
+        """
+
+        webView.evaluateJavaScript(wrapped) { [weak self] result, err in
+            if let err = err {
+                self?.log("inject error: \(err.localizedDescription)")
+                return
+            }
+            let r = String(describing: result ?? "")
+            if r.contains("already") {
+                self?.log("Vencord already injected")
+            } else if r.contains("error") {
+                self?.log("inject JS \(r)")
+            } else {
+                self?.log("Vencord inject OK")
             }
         }
     }
 
-    func injectVencord(into webView: WKWebView) {
-        guard !vencordJS.isEmpty else {
-            // Retry fetch then inject
-            Task {
-                await preloadVencord()
-                await MainActor.run { self.injectVencord(into: webView) }
-            }
-            return
+    func pageFinished(url: String?) {
+        log("didFinish \(url ?? "?")")
+        DispatchQueue.main.async { self.isLoading = false }
+        guard let wv = webView else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            self.injectVencord(into: wv)
         }
-        // Guard against double-inject
-        let wrapped = """
-        (function(){
-          if (window.__veniVencordInjected) return;
-          window.__veniVencordInjected = true;
-          try {
-            \(vencordJS)
-          } catch(e) { console.error('Vencord inject', e); }
-        })();
-        """
-        webView.evaluateJavaScript(wrapped) { _, err in
-            if let err = err { print("[VeniCanary] inject error", err) }
-            else { print("[VeniCanary] Vencord injected") }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
+            self.injectVencord(into: wv)
         }
     }
 }
@@ -85,12 +165,10 @@ struct DiscordWebView: UIViewRepresentable {
             config.defaultWebpagePreferences.allowsContentJavaScript = true
         }
 
-        // Early inject user script (runs at document start when possible)
-        let bootstrap = """
-        window.__veniCanary = true;
-        """
-        let script = WKUserScript(source: bootstrap, injectionTime: .atDocumentStart, forMainFrameOnly: true)
-        config.userContentController.addUserScript(script)
+        let bootstrap = "window.__veniCanary = true;"
+        config.userContentController.addUserScript(
+            WKUserScript(source: bootstrap, injectionTime: .atDocumentStart, forMainFrameOnly: true)
+        )
 
         let wv = WKWebView(frame: .zero, configuration: config)
         wv.navigationDelegate = context.coordinator
@@ -115,18 +193,16 @@ struct DiscordWebView: UIViewRepresentable {
 
         func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
             DispatchQueue.main.async { self.model.isLoading = true }
+            self.model.log("navigation start…")
         }
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+            self.model.pageFinished(url: webView.url?.absoluteString)
+        }
+
+        func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+            self.model.log("nav fail: \(error.localizedDescription)")
             DispatchQueue.main.async { self.model.isLoading = false }
-            // Inject after page load (Vendroid-style)
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
-                self.model.injectVencord(into: webView)
-            }
-            // Second pass for SPA route changes
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-                self.model.injectVencord(into: webView)
-            }
         }
 
         func webView(
@@ -139,12 +215,10 @@ struct DiscordWebView: UIViewRepresentable {
                 return
             }
             let host = url.host ?? ""
-            // Keep discord / canary inside webview
             if host.contains("discord.com") || host.contains("discordapp.com") {
                 decisionHandler(.allow)
                 return
             }
-            // External links → Safari
             if navigationAction.navigationType == .linkActivated {
                 UIApplication.shared.open(url)
                 decisionHandler(.cancel)
@@ -159,7 +233,7 @@ struct DiscordWebView: UIViewRepresentable {
             for navigationAction: WKNavigationAction,
             windowFeatures: WKWindowFeatures
         ) -> WKWebView? {
-            if navigationAction.targetFrame == nil, let url = navigationAction.request.url {
+            if navigationAction.targetFrame == nil {
                 webView.load(navigationAction.request)
             }
             return nil

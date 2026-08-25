@@ -6,7 +6,6 @@ struct VeniCanaryApp: App {
         WindowGroup {
             ContentView()
                 .preferredColorScheme(.dark)
-                .ignoresSafeArea()
         }
     }
 }

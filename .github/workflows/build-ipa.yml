@@ -24,8 +24,21 @@ jobs:
       - name: Install XcodeGen
         run: brew install xcodegen
 
-      - name: Generate project
-        run: xcodegen generate
+      - name: Generate Xcode project (format 56 / Xcode 15)
+        run: |
+          xcodegen generate
+          # Safety: force objectVersion 56 if xcodegen still emits higher
+          python3 - <<'PY'
+          import plistlib, pathlib
+          p = pathlib.Path("VeniCanary.xcodeproj/project.pbxproj")
+          text = p.read_text(encoding="utf-8")
+          # pbxproj is not pure plist always — do text replace
+          import re
+          text2 = re.sub(r"objectVersion = \d+", "objectVersion = 56", text, count=1)
+          text2 = re.sub(r"compatibilityVersion = \"[^\"]+\"", 'compatibilityVersion = "Xcode 14.0"', text2, count=1)
+          p.write_text(text2, encoding="utf-8")
+          print("patched objectVersion -> 56")
+          PY
 
       - name: Archive (unsigned)
         run: |
